@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EC2 with CloudWatch Monitoring and CPU Alert
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair
+    Type: AWS::EC2::KeyPair::KeyName
+
+  AlertEmail:
+    Description: subhrajitsanu3434@gmail.com
+    Type: String
+
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: AlertEmail
+          Protocol: email
+      TopicName: CPUHighAlertTopic
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  # EC2 Instance
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-0c2b8ca1dad447f8a
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: MonitoredInstance
+      UserData:
+          #!/bin/bash
+          yum update -y
+          yum install -y amazon-cloudwatch-agent
+          cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
+          {
+            "metrics": {
+              "metrics_collected": {
+                "cpu": {
+                  "measurement": ["cpu_usage_idle", "cpu_usage_iowait"],
+                  "metrics_collection_interval": 60
+                },
+                "mem": {
+                  "measurement": ["mem_used_percent"],
+                  "metrics_collection_interval": 60
+                },
+                "disk": {
+                  "measurement": ["used_percent"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["*"]
+                }
+              }
+            }
+          }
+          EOF
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a start \
+            -m ec2 \
+            -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+            -s
+
+  # CPU Utilization Alarm
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if CPU exceeds 80%"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2Instance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref SNSTopic]
+      OKActions: [!Ref SNSTopic]
+      Unit: Percent
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+
+  AlertTopic:
+    Description: SNS Topic ARN
+    Value: !Ref SNSTopic
